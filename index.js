@@ -2,10 +2,13 @@
 
 var crypto = require("crypto"),
     path = require("path"),
+    stream = require("stream"),
     url = require("url");
 
-var async = require("async"),
-    level = require("level");
+var _ = require("highland"),
+    async = require("async"),
+    level = require("level"),
+    ts = require("tilelive-streaming");
 
 // TODO store db instances outside of individual objects (in a locking cache) so
 // that multiple LevelDB instances can be open simultaneously providing
@@ -32,6 +35,136 @@ var LevelDB = function(uri, callback) {
     return callback(null, this);
   }.bind(this));
 };
+
+LevelDB.prototype.createReadStream = function(options) {
+  var source = this,
+      readable = new stream.Transform({
+        objectMode: true
+      });
+
+  source.getInfo(function(err, info) {
+    if (err) {
+      return tileSource.emit("error", err);
+    }
+
+    options = ts.restrict(ts.applyDefaults(options), info);
+    info = ts.clone(info);
+
+    // restrict info according to options and emit it
+    readable.emit("info", ts.restrict(info, options));
+
+    return _(function(push, next) {
+      for (var zoom = options.minzoom; zoom <= options.maxzoom; zoom++) {
+        push(null, zoom);
+      }
+
+      return push(null, _.nil);
+    }).map(function(zoom) {
+      var xyz = mercator.xyz(options.bounds, zoom),
+          x = xyz.minX;
+
+      return _(function(push, next) {
+        if (x > xyz.maxX) {
+          return push(null, _.nil);
+        }
+
+        push(null, [
+          [zoom, x, xyz.minY],
+          [zoom, x, xyz.maxY]
+        ]);
+
+        x++;
+
+        return next();
+      });
+    }).map(function(range) {
+      var start = range[0],
+          end = range[1],
+          iterator = source.db.iterator({
+            start: "data:" + start.join("/"),
+            end: "data:" + end.join("/"),
+            keyAsBuffer: false
+          });
+
+      return _(function(push, next) {
+        return iterator.next(function(err, key, value) {
+          if (err == null && key == null && value == null) {
+            return push(null, _.nil);
+          }
+
+          if (err) {
+            push(err);
+
+            return next();
+          }
+
+          var coords = key.split(":", 2).pop(),
+              parts = coords.split("/"),
+              z = parts.shift() | 0,
+              x = parts.shift() | 0,
+              y = parts.shift() | 0;
+              out = new ts.TileStream(z, x, y);
+
+          return source.db.get("headers:" + coords, {
+            valueEncoding: "json"
+          }, function(err, headers) {
+            push(out);
+
+            out.setHeaders(headers);
+
+            out.end(value);
+
+            return next();
+          });
+        });
+      });
+    }).sequence().pipe(readable);
+  });
+
+  return readable;
+};
+
+LevelDB.prototype.createWriteStream = function(options) {
+  var sink = this,
+      writeStream = new ts.Collector(),
+      writable = new ts.Writable(sink),
+      infoReceived = false,
+      done = function(err) {
+        if (err) {
+          throw err;
+        }
+      };
+
+  options = options || {};
+  options.info = options.info || {};
+
+  var putInfo = function(info) {
+    return sink.putInfo(ts.restrict(options.info, info), done);
+  };
+
+  writeStream.once("info", function(info) {
+    infoReceived = true;
+    options.info = _.extend(options.info, info);
+
+    return putInfo(info);
+  });
+
+  writable.on("finish", function() {
+    if (!infoReceived) {
+      infoReceived = true;
+
+      return putInfo(options.info, async.apply(writable.emit.bind(writable), "finish"));
+    }
+
+    return sink.close(function() {});
+  });
+
+  writeStream.pipe(writable);
+
+  // return the head-end of the pipeline
+  return writeStream;
+};
+
 
 LevelDB.prototype.getTile = function(zoom, x, y, callback) {
   callback = callback || function() {};
