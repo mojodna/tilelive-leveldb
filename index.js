@@ -103,7 +103,7 @@ LevelDB.prototype.createReadStream = function(options) {
               parts = coords.split("/"),
               z = parts.shift() | 0,
               x = parts.shift() | 0,
-              y = parts.shift() | 0;
+              y = parts.shift() | 0,
               out = new ts.TileStream(z, x, y);
 
           return source.db.get("headers:" + coords, {
