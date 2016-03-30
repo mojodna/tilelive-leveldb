@@ -39,7 +39,7 @@ var LevelDB = function(uri, callback) {
 
 LevelDB.prototype.createReadStream = function(options) {
   var source = this,
-      readable = new stream.Transform({
+      readable = new stream.PassThrough({
         objectMode: true
       });
 
@@ -109,7 +109,7 @@ LevelDB.prototype.createReadStream = function(options) {
           return source.db.get("headers:" + coords, {
             valueEncoding: "json"
           }, function(err, headers) {
-            push(out);
+            push(null, out);
 
             out.setHeaders(headers);
 
