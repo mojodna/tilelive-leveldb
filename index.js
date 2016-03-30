@@ -8,6 +8,7 @@ var crypto = require("crypto"),
 var _ = require("highland"),
     async = require("async"),
     level = require("level"),
+    mercator = new (require("sphericalmercator"))(),
     ts = require("tilelive-streaming");
 
 // TODO store db instances outside of individual objects (in a locking cache) so
