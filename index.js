@@ -124,6 +124,8 @@ LevelDB.prototype.createReadStream = function(options) {
   return readable;
 };
 
+// TODO reconcile this with the default createWriteStream implementation in
+// tilelive-streaming
 LevelDB.prototype.createWriteStream = function(options) {
   var sink = this,
       writeStream = new ts.Collector(),
