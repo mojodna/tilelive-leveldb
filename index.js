@@ -326,7 +326,10 @@ LevelDB.prototype.open = function(callback) {
 
 LevelDB.prototype.openForWrite = function(callback) {
   callback = callback || function() {};
-  var self = this;
+
+  if (this._openForWrite) {
+    return callback(null, this.db);
+  }
 
   var close = function(cb) {
     return cb();
@@ -336,6 +339,8 @@ LevelDB.prototype.openForWrite = function(callback) {
     // close and re-open if appropriate
     close = this.db.close.bind(this.db);
   }
+
+  var self = this;
 
   return close(function(err) {
     if (err) {
@@ -350,6 +355,7 @@ LevelDB.prototype.openForWrite = function(callback) {
         return callback(err);
       }
 
+      self._openForWrite = true;
       self.db = db;
 
       return callback(null, db);
