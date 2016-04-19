@@ -80,15 +80,15 @@ LevelDB.prototype.createReadStream = function(options) {
       });
     }).sequence().map(function(range) {
       var iterator = source.db.db.iterator({
-        gte: "tile:" + range[0].join("/"),
-        lt: "tile:" + range[1].join("/"),
+        gte: "data:" + range[0].join("/"),
+        lt: "data:" + range[1].join("/"),
         keyAsBuffer: false,
         valueAsBuffer: false
       });
 
       return _(function(push, next) {
-        return iterator.next(function(err, key, md5) {
-          if (err == null && key == null && md5 == null) {
+        return iterator.next(function(err, key, value) {
+          if (err == null && key == null && value == null) {
             return push(null, _.nil);
           }
 
@@ -105,12 +105,9 @@ LevelDB.prototype.createReadStream = function(options) {
               y = parts.shift() | 0,
               out = new ts.TileStream(z, x, y);
 
-          return async.parallel({
-            data: async.apply(source.db.get.bind(source.db), "data:" + md5),
-            headers: async.apply(source.db.get.bind(source.db), "headers:" + md5, {
-              valueEncoding: "json"
-            })
-          }, function(err, result) {
+          return source.db.get("headers:" + coords, {
+            valueEncoding: "json"
+          }, function(err, headers) {
             if (err) {
               push(err);
 
@@ -119,9 +116,9 @@ LevelDB.prototype.createReadStream = function(options) {
 
             push(null, out);
 
-            out.setHeaders(result.headers);
+            out.setHeaders(headers);
 
-            out.end(result.data);
+            out.end(value);
 
             return next();
           });
@@ -145,33 +142,33 @@ LevelDB.prototype.getTile = function(zoom, x, y, callback) {
 
   // TODO incorporate all options into the key (when this.options replace (z,x,y))
   var key = [zoom, x, y].join("/"),
-      db = this.db;
+      get = this.db.get.bind(this.db);
 
-  return db.get("tile:" + key, {
-    valueEncoding: "utf8"
-  }, function(err, md5) {
-    return async.parallel({
-      headers: async.apply(db.get.bind(db), "headers:" + md5, {
-        valueEncoding: "json"
-      }),
-      data: async.apply(db.get.bind(db), "data:" + md5)
-    }, function(err, results) {
-      if (err) {
-        return callback(err);
-      }
+  return async.parallel({
+    headers: async.apply(get, "headers:" + key, {
+      valueEncoding: "json"
+    }),
+    data: async.apply(get, "data:" + key),
+    md5: async.apply(get, "md5:" + key, {
+      valueEncoding: "utf8"
+    })
+  }, function(err, results) {
+    if (err) {
+      return callback(err);
+    }
 
-      var headers = results.headers,
-          data = results.data,
-          hash = crypto.createHash("md5").update(data).digest().toString("hex");
+    var headers = results.headers,
+        data = results.data,
+        md5 = results.md5,
+        hash = crypto.createHash("md5").update(data).digest().toString("hex");
 
-      if (md5 !== hash) {
-        return callback(new Error(util.format("MD5 values don't match for %s", key)));
-      }
+    if (md5 !== hash) {
+      return callback(new Error(util.format("MD5 values don't match for %s", key)));
+    }
 
-      // TODO if data == null, pass an Exception
+    // TODO if data == null, pass an Exception
 
-      return callback(null, data, headers);
-    });
+    return callback(null, data, headers);
   });
 };
 
@@ -212,42 +209,28 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
       return callback(err);
     }
 
-    return db.get(md5, function(err, refs) {
-      if (err && err.name !== "NotFoundError") {
-        return callback(err);
+    var operations = [
+      {
+        type: "put",
+        key: "md5:" + key,
+        value: md5,
+        valueEncoding: "utf8"
+      },
+      {
+        type: "put",
+        key: "headers:" + key,
+        value: headers,
+        valueEncoding: "json"
+      },
+      {
+        type: "put",
+        key: "data:" + key,
+        value: data
       }
+    ];
 
-      var operations = [
-        {
-          type: "put",
-          key: "tile:" + key,
-          value: md5,
-          valueEncoding: "utf8"
-        },
-        {
-          type: "put",
-          key: "headers:" + md5,
-          value: headers,
-          valueEncoding: "json"
-        },
-        {
-          type: "put",
-          key: md5,
-          value: (refs | 0) + 1,
-          valueEncoding: "json"
-        }
-      ];
-
-      if (refs == null) {
-        operations.push({
-          type: "put",
-          key: "data:" + md5,
-          value: data
-        });
-      }
-
-      return db.batch(operations, callback);
-    });
+    // TODO cargo operations
+    return db.batch(operations, callback);
   });
 };
 
@@ -288,59 +271,23 @@ LevelDB.prototype.dropTile = function(zoom, x, y, callback) {
       return callback(err);
     }
 
-    return db.get("tile:" + key, {
-      valueEncoding: "utf8"
-    }, function(err, md5) {
-      if (err) {
-        return callback(err);
+    var operations = [
+      {
+        type: "del",
+        key: "md5:" + key
+      },
+      {
+        type: "del",
+        key: "headers:" + key
+      },
+      {
+        type: "del",
+        key: "data:" + key
       }
+    ];
 
-      var operations = [
-        // TODO use reference counting on [md5] value to determine when to drop
-        // data:[md5]
-        // {
-        //   type: "del",
-        //   key: "data:" + md5
-        // },
-        {
-          type: "del",
-          key: "headers:" + md5
-        },
-        {
-          type: "del",
-          key: key
-        }
-      ];
-
-      return db.get(md5, {
-        valueEncoding: "json"
-      }, function(err, refs) {
-        if (err && err.name !== "NotFoundError") {
-          return callback(err);
-        }
-
-        refs = refs | 0;
-
-        if (refs - 1 === 0) {
-          operations.push({
-            type: "del",
-            key: md5
-          }).push({
-            type: "del",
-            key: "data:" + md5
-          });
-        } else {
-          operations.push({
-            type: "put",
-            key: md5,
-            value: refs - 1,
-            valueEncoding: "json"
-          });
-        }
-
-        return db.batch(operations, callback);
-      });
-    });
+    // TODO cargo
+    return db.batch(operations, callback);
   });
 };
 
