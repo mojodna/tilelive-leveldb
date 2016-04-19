@@ -94,7 +94,7 @@ LevelDB.prototype.createReadStream = function(options) {
     }).sequence().map(function(range) {
       var iterator = source.db.db.iterator({
         gte: "data:" + range[0].join("/"),
-        lt: "data:" + range[1].join("/"),
+        lte: "data:" + range[1].join("/"),
         keyAsBuffer: false,
         valueAsBuffer: false
       });
