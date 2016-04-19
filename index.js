@@ -180,7 +180,9 @@ LevelDB.prototype.getTile = function(zoom, x, y, callback) {
       return callback(new Error(util.format("MD5 values don't match for %s", key)));
     }
 
-    // TODO if data == null, pass an Exception
+    if (data == null) {
+      return callback(new Error("Tile does not exist"));
+    }
 
     return callback(null, data, headers);
   });
