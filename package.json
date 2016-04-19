@@ -8,6 +8,7 @@
     "async": "^1.5.2",
     "highland": "^2.7.2",
     "level": "^1.4.0",
+    "leveldown": "^1.4.5",
     "sphericalmercator": "^1.0.4",
     "tilelive-streaming": "0.7.2"
   }

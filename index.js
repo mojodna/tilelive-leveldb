@@ -8,6 +8,7 @@ var crypto = require("crypto"),
 var _ = require("highland"),
     async = require("async"),
     level = require("level"),
+    leveldown = require("leveldown"),
     mercator = new (require("sphericalmercator"))(),
     ts = require("tilelive-streaming");
 
@@ -365,13 +366,29 @@ LevelDB.prototype.openForWrite = function(callback) {
 
 LevelDB.prototype.close = function(callback) {
   callback = callback || function() {};
+  var self = this;
+
+  var close = function() {
+    self.db.close(function(err) {
+      if (err) {
+        return callback(err);
+      }
+
+      if (self._openForWrite) {
+        // compact
+        return setImmediate(leveldown.repair, self.path, callback);
+      }
+
+      return callback();
+    })
+  }
 
   if (!this.cargo.idle()) {
-    this.cargo.drain = this.db.close.bind(this.db, callback);
+    this.cargo.drain = close;
     return;
   }
 
-  return this.db.close(callback);
+  return close();
 };
 
 LevelDB.registerProtocols = function(tilelive) {
