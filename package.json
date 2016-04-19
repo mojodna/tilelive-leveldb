@@ -11,5 +11,8 @@
     "leveldown": "^1.4.5",
     "sphericalmercator": "^1.0.4",
     "tilelive-streaming": "0.7.2"
+  },
+  "devDependencies": {
+    "eslint": "^2.8.0"
   }
 }
