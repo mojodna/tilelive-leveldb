@@ -58,7 +58,7 @@ LevelDB.prototype.createReadStream = function(options) {
 
   source.getInfo(function(err, info) {
     if (err) {
-      return tileSource.emit("error", err);
+      return readable.emit("error", err);
     }
 
     options = ts.restrict(ts.applyDefaults(options), info);
