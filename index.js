@@ -28,6 +28,18 @@ var LevelDB = function(uri, callback) {
   this.scale = uri.query.scale || 1;
   this.format = uri.query.format || "";
 
+  var self = this;
+
+  this.cargo = async.cargo(function(operations, done) {
+    return self.openForWrite(function(err, db) {
+      if (err) {
+        return done(err);
+      }
+
+      return db.batch(operations, done);
+    });
+  });
+
   return this.open(function(err) {
     if (err) {
       return callback(err);
@@ -140,6 +152,8 @@ LevelDB.prototype.getTile = function(zoom, x, y, callback) {
     return callback(new Error("Archive doesn't exist: " + url.format(this.uri)));
   }
 
+  // TODO flush pending writes
+
   // TODO incorporate all options into the key (when this.options replace (z,x,y))
   var key = [zoom, x, y].join("/"),
       get = this.db.get.bind(this.db);
@@ -204,34 +218,29 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
   // provided
   var key = [zoom, x, y].join("/");
 
-  return this.openForWrite(function(err, db) {
-    if (err) {
-      return callback(err);
+  var operations = [
+    {
+      type: "put",
+      key: "md5:" + key,
+      value: md5,
+      valueEncoding: "utf8"
+    },
+    {
+      type: "put",
+      key: "headers:" + key,
+      value: headers,
+      valueEncoding: "json"
+    },
+    {
+      type: "put",
+      key: "data:" + key,
+      value: data
     }
+  ];
 
-    var operations = [
-      {
-        type: "put",
-        key: "md5:" + key,
-        value: md5,
-        valueEncoding: "utf8"
-      },
-      {
-        type: "put",
-        key: "headers:" + key,
-        value: headers,
-        valueEncoding: "json"
-      },
-      {
-        type: "put",
-        key: "data:" + key,
-        value: data
-      }
-    ];
+  this.cargo.push(operations);
 
-    // TODO cargo operations
-    return db.batch(operations, callback);
-  });
+  return callback();
 };
 
 LevelDB.prototype.getInfo = function(callback) {
@@ -348,6 +357,11 @@ LevelDB.prototype.openForWrite = function(callback) {
 
 LevelDB.prototype.close = function(callback) {
   callback = callback || function() {};
+
+  if (!this.cargo.idle()) {
+    this.cargo.drain = this.db.close.bind(this.db, callback);
+    return;
+  }
 
   return this.db.close(callback);
 };
