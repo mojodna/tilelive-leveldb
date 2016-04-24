@@ -9,12 +9,30 @@ var _ = require("highland"),
     async = require("async"),
     level = require("level"),
     leveldown = require("leveldown"),
-    mercator = new (require("sphericalmercator"))(),
+    lockingCache = require("locking-cache"),
+    SphericalMercator = require("sphericalmercator"),
     ts = require("tilelive-streaming");
 
-// TODO store db instances outside of individual objects (in a locking cache) so
-// that multiple LevelDB instances can be open simultaneously providing
-// different formats and scales
+var lockedOpen = lockingCache({
+      // lru-cache options
+      max: 10
+    }),
+    mercator = new SphericalMercator();
+
+var open = lockedOpen(function(path, options, lock) {
+  // TODO there's the db key and there's the sublevel key (with options)
+  var key = crypto.createHash("sha1").update(JSON.stringify({
+    path: path,
+    options: options
+  })).digest().toString("hex");
+
+  // lock
+  return lock(key, function(unlock) {
+    return level(path, {
+      valueEncoding: "binary"
+    }, unlock);
+  });
+});
 
 var LevelDB = function(uri, callback) {
   if (typeof(uri) === "string") {
@@ -31,23 +49,16 @@ var LevelDB = function(uri, callback) {
 
   var self = this;
 
-  this.cargo = async.cargo(function(operations, done) {
-    return self.openForWrite(function(err, db) {
-      if (err) {
-        return done(err);
+  this.cargo = async.cargo(function(operations, next) {
+    return async.waterfall([
+      async.apply(self.open),
+      function(db, done) {
+        return db.batch(options, done);
       }
-
-      return db.batch(operations, done);
-    });
+    ], next);
   });
 
-  return this.open(function(err) {
-    if (err) {
-      return callback(err);
-    }
-
-    return callback(null, this);
-  }.bind(this));
+  return setImmediate(callback, null, this);
 };
 
 LevelDB.prototype.createReadStream = function(options) {
@@ -149,44 +160,41 @@ LevelDB.prototype.getTile = function(zoom, x, y, callback) {
   x = x | 0;
   y = y | 0;
 
-  if (!this.db) {
-    return callback(new Error("Archive doesn't exist: " + url.format(this.uri)));
-  }
-
-  // TODO flush pending writes
-
   // TODO incorporate all options into the key (when this.options replace (z,x,y))
-  var key = [zoom, x, y].join("/"),
-      get = this.db.get.bind(this.db);
+  var key = [zoom, x, y].join("/");
 
-  return async.parallel({
-    headers: async.apply(get, "headers:" + key, {
-      valueEncoding: "json"
-    }),
-    data: async.apply(get, "data:" + key),
-    md5: async.apply(get, "md5:" + key, {
-      valueEncoding: "utf8"
-    })
-  }, function(err, results) {
-    if (err) {
-      return callback(err);
+  return async.waterfall([
+    async.apply(this.open),
+    function(db, done) {
+      var get = db.get.bind(db);
+
+      return async.parallel({
+        headers: async.apply(get, "headers:" + key, {
+          valueEncoding: "json"
+        }),
+        data: async.apply(get, "data:" + key),
+        md5: async.apply(get, "md5:" + key, {
+          valueEncoding: "utf8"
+        })
+      }, done);
+    },
+    function(results, done) {
+      var headers = results.headers,
+          data = results.data,
+          md5 = results.md5,
+          hash = crypto.createHash("md5").update(data).digest().toString("hex");
+
+      if (md5 !== hash) {
+        return done(new Error(util.format("MD5 values don't match for %s", key)));
+      }
+
+      if (data == null) {
+        return done(new Error("Tile does not exist"));
+      }
+
+      return done(null, data, headers);
     }
-
-    var headers = results.headers,
-        data = results.data,
-        md5 = results.md5,
-        hash = crypto.createHash("md5").update(data).digest().toString("hex");
-
-    if (md5 !== hash) {
-      return callback(new Error(util.format("MD5 values don't match for %s", key)));
-    }
-
-    if (data == null) {
-      return callback(new Error("Tile does not exist"));
-    }
-
-    return callback(null, data, headers);
-  });
+  ], callback);
 };
 
 LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
@@ -219,55 +227,67 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
 
   // TODO incorporate all supported options in the key if options were
   // provided
-  var key = [zoom, x, y].join("/");
+  var key = [zoom, x, y].join("/"),
+      cargo = this.cargo;
 
-  var operations = [
-    {
-      type: "put",
-      key: "md5:" + key,
-      value: md5,
-      valueEncoding: "utf8"
-    },
-    {
-      type: "put",
-      key: "headers:" + key,
-      value: headers,
-      valueEncoding: "json"
-    },
-    {
-      type: "put",
-      key: "data:" + key,
-      value: data
+  async.waterfall([
+    async.apply(this.open),
+    function(db, done) {
+      var operations = [
+        {
+          type: "put",
+          key: "md5:" + key,
+          value: md5,
+          valueEncoding: "utf8"
+        },
+        {
+          type: "put",
+          key: "headers:" + key,
+          value: headers,
+          valueEncoding: "json"
+        },
+        {
+          type: "put",
+          key: "data:" + key,
+          value: data
+        }
+      ];
+
+      cargo.push(operations, done);
     }
-  ];
+  ], function(err) {
+    if (err) {
+      console.warn(err.stack);
+    }
 
-  this.cargo.push(operations);
+    // if we wanted to track pending writes, we would do it here
+  })
 
   return callback();
 };
 
 LevelDB.prototype.getInfo = function(callback) {
-  if (!this.db) {
-    return callback(new Error("Archive doesn't exist: " + url.format(this.uri)));
-  }
-
-  return this.db.get("info", {
-    valueEncoding: "json"
-  }, callback);
+  return async.waterfall([
+    async.apply(this.open),
+    function(db, done) {
+      return db.get("info", {
+        valueEncoding: "json"
+      }, done);
+    }
+  ], callback);
 };
 
 LevelDB.prototype.putInfo = function(info, callback) {
   callback = callback || function() {};
 
-  return this.openForWrite(function(err, db) {
-    if (err) {
-      return callback(err);
+  return async.waterfall([
+    async.apply(this.open),
+    function(db, done) {
+      return db.put("info", info, {
+        valueEncoding: "json"
+      }, done);
     }
-
-    return db.put("info", info, {
-      valueEncoding: "json"
-    }, callback);
-  });
+  ], callback);
 };
 
 LevelDB.prototype.dropTile = function(zoom, x, y, callback) {
@@ -278,93 +298,41 @@ LevelDB.prototype.dropTile = function(zoom, x, y, callback) {
 
   var key = [zoom, x, y].join("/");
 
-  return this.openForWrite(function(err, db) {
-    if (err) {
-      return callback(err);
+  return async.waterfall([
+    async.apply(this.open),
+    function(db, done) {
+      var operations = [
+        {
+          type: "del",
+          key: "md5:" + key
+        },
+        {
+          type: "del",
+          key: "headers:" + key
+        },
+        {
+          type: "del",
+          key: "data:" + key
+        }
+      ];
+
+      // callback will be called once the operations have been flushed
+      return this.cargo.push(operations, done);
     }
-
-    var operations = [
-      {
-        type: "del",
-        key: "md5:" + key
-      },
-      {
-        type: "del",
-        key: "headers:" + key
-      },
-      {
-        type: "del",
-        key: "data:" + key
-      }
-    ];
-
-    // TODO cargo
-    return db.batch(operations, callback);
-  });
+  ], callback);
 };
 
 LevelDB.prototype.open = function(callback) {
   callback = callback || function() {};
-  var self = this;
 
-  this.db = level(this.path, {
-    // TODO play with blockSize
-    // TODO extract options
-    createIfMissing: false,
-    valueEncoding: "binary"
-  }, function(err) {
-    if (err) {
-      if (err.type === "OpenError") {
-        self.db = null;
-      } else {
-        return callback(err);
-      }
-    }
-
-    return callback();
-  });
-};
-
-LevelDB.prototype.openForWrite = function(callback) {
-  callback = callback || function() {};
-
-  if (this._openForWrite) {
-    return callback(null, this.db);
-  }
-
-  var close = function(cb) {
-    return cb();
-  };
-
-  if (this.db) {
-    // close and re-open if appropriate
-    close = this.db.close.bind(this.db);
-  }
-
-  var self = this;
-
-  return close(function(err) {
-    if (err) {
-      return callback(err);
-    }
-
-    return level(self.path, {
-      createIfMissing: true,
-      valueEncoding: "binary"
-    }, function(err, db) {
-      if (err) {
-        return callback(err);
-      }
-
-      self._openForWrite = true;
-      self.db = db;
-
-      return callback(null, db);
-    });
-  });
+  return open(this.path, {
+    format: this.format,
+    scale: this.scale
+  }, callback);
 };
 
 LevelDB.prototype.close = function(callback) {
+  // TODO figure out when to actually close (reference counting?)
   callback = callback || function() {};
   var self = this;
 

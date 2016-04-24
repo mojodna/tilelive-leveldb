@@ -9,6 +9,7 @@
     "highland": "^2.7.2",
     "level": "^1.4.0",
     "leveldown": "^1.4.5",
+    "locking-cache": "^0.2.1",
     "sphericalmercator": "^1.0.4",
     "tilelive-streaming": "0.7.2"
   },
