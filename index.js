@@ -164,7 +164,6 @@ LevelDB.prototype.getTile = function(zoom, x, y, callback) {
   x = x | 0;
   y = y | 0;
 
-  // TODO incorporate all options into the key (when this.options replace (z,x,y))
   var key = [zoom, x, y].join("/");
 
   return async.waterfall([
@@ -229,8 +228,6 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
     _headers["content-md5"] = md5;
   }
 
-  // TODO incorporate all supported options in the key if options were
-  // provided
   var key = [zoom, x, y].join("/"),
       cargo = this.cargo;
 
