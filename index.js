@@ -11,20 +11,16 @@ var _ = require("highland"),
     leveldown = require("leveldown"),
     lockingCache = require("locking-cache"),
     SphericalMercator = require("sphericalmercator"),
+    sublevel = require("level-sublevel"),
     ts = require("tilelive-streaming");
 
-var lockedOpen = lockingCache({
-      // lru-cache options
+var lockedOpenDb = lockingCache({
       max: 10
     }),
     mercator = new SphericalMercator();
 
-var open = lockedOpen(function(path, options, lock) {
-  // TODO there's the db key and there's the sublevel key (with options)
-  var key = crypto.createHash("sha1").update(JSON.stringify({
-    path: path,
-    options: options
-  })).digest().toString("hex");
+var openDb = lockedOpenDb(function(path, lock) {
+  var key = crypto.createHash("sha1").update(path).digest().toString("hex");
 
   // lock
   return lock(key, function(unlock) {
@@ -33,6 +29,17 @@ var open = lockedOpen(function(path, options, lock) {
     }, unlock);
   });
 });
+
+var open = function(path, options, callback) {
+  var prefix = crypto.createHash("sha1").update(JSON.stringify(options)).digest().toString("hex");
+
+  return async.waterfall([
+    async.apply(openDb, path),
+    function(db, done) {
+      return done(null, sublevel(db).sublevel(prefix));
+    }
+  ], callback);
+};
 
 var LevelDB = function(uri, callback) {
   if (typeof(uri) === "string") {
@@ -51,9 +58,9 @@ var LevelDB = function(uri, callback) {
 
   this.cargo = async.cargo(function(operations, next) {
     return async.waterfall([
-      async.apply(self.open),
+      async.apply(self.open.bind(self)),
       function(db, done) {
-        return db.batch(options, done);
+        return db.batch(operations, done);
       }
     ], next);
   });
@@ -72,83 +79,80 @@ LevelDB.prototype.createReadStream = function(options) {
       return readable.emit("error", err);
     }
 
-    options = ts.restrict(ts.applyDefaults(options), info);
-    info = ts.clone(info);
-
-    // restrict info according to options and emit it
-    readable.emit("info", ts.restrict(info, options));
-
-    return _(function(push, next) {
-      for (var zoom = options.minzoom; zoom <= options.maxzoom; zoom++) {
-        push(null, zoom);
+    return source.open(function(err, db) {
+      if (err) {
+        return readable.emit("error", err);
       }
 
-      return push(null, _.nil);
-    }).map(function(zoom) {
-      var xyz = mercator.xyz(options.bounds, zoom),
-          x = xyz.minX;
+      options = ts.restrict(ts.applyDefaults(options), info);
+      info = ts.clone(info);
+
+      // restrict info according to options and emit it
+      readable.emit("info", ts.restrict(info, options));
 
       return _(function(push, next) {
-        if (x > xyz.maxX) {
-          return push(null, _.nil);
+        for (var zoom = options.minzoom; zoom <= options.maxzoom; zoom++) {
+          push(null, zoom);
         }
 
-        push(null, [
-          [zoom, x, xyz.minY],
-          [zoom, x, xyz.maxY]
-        ]);
+        return push(null, _.nil);
+      }).map(function(zoom) {
+        var xyz = mercator.xyz(options.bounds, zoom),
+            x = xyz.minX;
 
-        x++;
-
-        return next();
-      });
-    }).sequence().map(function(range) {
-      var iterator = source.db.db.iterator({
-        gte: "data:" + range[0].join("/"),
-        lte: "data:" + range[1].join("/"),
-        keyAsBuffer: false,
-        valueAsBuffer: false
-      });
-
-      return _(function(push, next) {
-        return iterator.next(function(err, key, value) {
-          if (err == null && key == null && value == null) {
+        return _(function(push, next) {
+          if (x > xyz.maxX) {
             return push(null, _.nil);
           }
 
-          if (err) {
-            push(err);
+          push(null, [
+            [zoom, x, xyz.minY],
+            [zoom, x, xyz.maxY]
+          ]);
 
-            return next();
-          }
+          x++;
 
-          var coords = key.split(":", 2).pop(),
+          return next();
+        });
+      }).sequence().map(function(range) {
+        var readStream = new stream.PassThrough({
+          objectMode: true
+        });
+
+        readStream._transform = function(obj, _, callback) {
+          var key = obj.key,
+              value = obj.value,
+              coords = key.split(":", 2).pop(),
               parts = coords.split("/"),
               z = parts.shift() | 0,
               x = parts.shift() | 0,
               y = parts.shift() | 0,
               out = new ts.TileStream(z, x, y);
 
-          return source.db.get("headers:" + coords, {
+          return db.get("headers:" + coords, {
             valueEncoding: "json"
           }, function(err, headers) {
             if (err) {
-              push(err);
-
-              return next();
+              return callback(err);
             }
 
-            push(null, out);
+            readStream.push(out);
 
             out.setHeaders(headers);
 
             out.end(value);
 
-            return next();
+            return callback();
           });
-        });
-      });
-    }).sequence().pipe(readable);
+        };
+
+        return _(db.createReadStream({
+          gte: "data:" + range[0].join("/"),
+          lte: "data:" + range[1].join("/"),
+          valueEncoding: "binary"
+        }).pipe(readStream));
+      }).sequence().pipe(readable);
+    });
   });
 
   return readable;
@@ -164,7 +168,7 @@ LevelDB.prototype.getTile = function(zoom, x, y, callback) {
   var key = [zoom, x, y].join("/");
 
   return async.waterfall([
-    async.apply(this.open),
+    async.apply(this.open.bind(this)),
     function(db, done) {
       var get = db.get.bind(db);
 
@@ -231,7 +235,7 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
       cargo = this.cargo;
 
   async.waterfall([
-    async.apply(this.open),
+    async.apply(this.open.bind(this)),
     function(db, done) {
       var operations = [
         {
@@ -268,7 +272,7 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
 
 LevelDB.prototype.getInfo = function(callback) {
   return async.waterfall([
-    async.apply(this.open),
+    async.apply(this.open.bind(this)),
     function(db, done) {
       return db.get("info", {
         valueEncoding: "json"
@@ -281,7 +285,7 @@ LevelDB.prototype.putInfo = function(info, callback) {
   callback = callback || function() {};
 
   return async.waterfall([
-    async.apply(this.open),
+    async.apply(this.open.bind(this)),
     function(db, done) {
       return db.put("info", info, {
         valueEncoding: "json"
@@ -299,7 +303,7 @@ LevelDB.prototype.dropTile = function(zoom, x, y, callback) {
   var key = [zoom, x, y].join("/");
 
   return async.waterfall([
-    async.apply(this.open),
+    async.apply(this.open.bind(this)),
     function(db, done) {
       var operations = [
         {
@@ -332,31 +336,14 @@ LevelDB.prototype.open = function(callback) {
 };
 
 LevelDB.prototype.close = function(callback) {
-  // TODO figure out when to actually close (reference counting?)
   callback = callback || function() {};
-  var self = this;
-
-  var close = function() {
-    self.db.close(function(err) {
-      if (err) {
-        return callback(err);
-      }
-
-      if (self._openForWrite) {
-        // compact
-        return setImmediate(leveldown.repair, self.path, callback);
-      }
-
-      return callback();
-    })
-  }
 
   if (!this.cargo.idle()) {
-    this.cargo.drain = close;
+    this.cargo.drain = callback;
     return;
   }
 
-  return close();
+  return callback();
 };
 
 LevelDB.registerProtocols = function(tilelive) {
