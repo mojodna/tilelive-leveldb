@@ -41,6 +41,7 @@ var open = function(path, options, callback) {
   ], callback);
 };
 
+// TODO tell tilelive-cache to avoid caching
 var LevelDB = function(uri, callback) {
   if (typeof(uri) === "string") {
     uri = url.parse(uri, true);
