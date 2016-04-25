@@ -50,9 +50,12 @@ var LevelDB = function(uri, callback) {
 
   this.uri = uri;
   this.path = path.join(uri.hostname, uri.pathname);
+
   // support for multi-scale/multi-format archives
-  this.scale = uri.query.scale || 1;
   this.format = uri.query.format || "";
+  // id for archives containing multiple styles
+  this.id = uri.query.id || "";
+  this.scale = uri.query.scale || 1;
 
   var self = this;
 
@@ -328,6 +331,7 @@ LevelDB.prototype.open = function(callback) {
 
   return open(this.path, {
     format: this.format,
+    id: this.id,
     scale: this.scale
   }, callback);
 };
