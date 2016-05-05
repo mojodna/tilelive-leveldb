@@ -1,8 +1,8 @@
 {
   "name": "tilelive-leveldb",
   "version": "0.0.0",
-  "description": "",
-  "author": "",
+  "description": "A leveldb-backed tilelive source and sink",
+  "author": "Seth Fitzsimmons <seth@mojodna.net>",
   "license": "ISC",
   "dependencies": {
     "async": "^1.5.2",
