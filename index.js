@@ -183,20 +183,27 @@ LevelDB.prototype.getTile = function(zoom, x, y, callback) {
         md5: async.apply(get, "md5:" + key, {
           valueEncoding: "utf8"
         })
-      }, done);
+      }, function(err, results) {
+        if (err && err.name !== "NotFoundError") {
+          return done(err);
+        }
+
+        return done(null, results);
+      });
     },
     function(results, done) {
       var headers = results.headers,
           data = results.data,
-          md5 = results.md5,
-          hash = crypto.createHash("md5").update(data).digest().toString("hex");
-
-      if (md5 !== hash) {
-        return done(new Error(util.format("MD5 values don't match for %s", key)));
-      }
+          md5 = results.md5;
 
       if (data == null) {
         return done(new Error("Tile does not exist"));
+      }
+
+      var hash = crypto.createHash("md5").update(data).digest().toString("hex");
+
+      if (md5 !== hash) {
+        return done(new Error(util.format("MD5 values don't match for %s", key)));
       }
 
       return done(null, data, headers);
