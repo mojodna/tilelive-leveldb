@@ -9,16 +9,16 @@
   },
   "license": "ISC",
   "dependencies": {
-    "async": "^1.5.2",
+    "@mapbox/sphericalmercator": "^1.0.5",
+    "async": "^2.6.0",
     "highland": "^2.7.2",
-    "level": "^1.4.0",
+    "level": "^2.0.1",
     "level-sublevel": "^6.5.4",
-    "leveldown": "^1.4.5",
-    "locking-cache": "^0.2.1",
-    "sphericalmercator": "^1.0.4",
+    "leveldown": "^2.1.0",
+    "locking-cache": "^0.4.1",
     "tilelive-streaming": "^0.7.2"
   },
   "devDependencies": {
-    "eslint": "^2.8.0"
+    "eslint": "^4.11.0"
   }
 }

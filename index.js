@@ -10,7 +10,7 @@ var _ = require("highland"),
     level = require("level"),
     leveldown = require("leveldown"),
     lockingCache = require("locking-cache"),
-    SphericalMercator = require("sphericalmercator"),
+    SphericalMercator = require("@mapbox/sphericalmercator"),
     sublevel = require("level-sublevel"),
     ts = require("tilelive-streaming");
 
