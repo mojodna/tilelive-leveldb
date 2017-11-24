@@ -126,7 +126,7 @@ LevelDB.prototype.createReadStream = function(options) {
         readStream._transform = function(obj, _, callback) {
           var key = obj.key,
               value = obj.value,
-              coords = key.split(":", 2).pop(),
+              coords = key.split(":", 2).shift(),
               parts = coords.split("/"),
               z = parts.shift() | 0,
               x = parts.shift() | 0,
@@ -151,8 +151,8 @@ LevelDB.prototype.createReadStream = function(options) {
         };
 
         return _(db.createReadStream({
-          gte: "data:" + range[0].join("/"),
-          lte: "data:" + range[1].join("/"),
+          gte: range[0].join("/") + ":data",
+          lte: range[1].join("/") + ":data",
           valueEncoding: "binary"
         }).pipe(readStream));
       }).sequence().pipe(readable);
@@ -176,11 +176,11 @@ LevelDB.prototype.getTile = function(zoom, x, y, callback) {
       var get = db.get.bind(db);
 
       return async.parallel({
-        headers: async.apply(get, "headers:" + key, {
+        headers: async.apply(get, key + ":headers", {
           valueEncoding: "json"
         }),
-        data: async.apply(get, "data:" + key),
-        md5: async.apply(get, "md5:" + key, {
+        data: async.apply(get, key + ":data"),
+        md5: async.apply(get, key + ":md5", {
           valueEncoding: "utf8"
         })
       }, function(err, results) {
@@ -243,19 +243,19 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
   var operations = [
     {
       type: "put",
-      key: "md5:" + key,
+      key: key + ":md5",
       value: md5,
       valueEncoding: "utf8"
     },
     {
       type: "put",
-      key: "headers:" + key,
+      key: key + ":headers",
       value: headers,
       valueEncoding: "json"
     },
     {
       type: "put",
-      key: "data:" + key,
+      key: key + ":data",
       value: data
     }
   ];
@@ -311,15 +311,15 @@ LevelDB.prototype.dropTile = function(zoom, x, y, callback) {
       var operations = [
         {
           type: "del",
-          key: "md5:" + key
+          key: key + ":md5"
         },
         {
           type: "del",
-          key: "headers:" + key
+          key: key + ":headers"
         },
         {
           type: "del",
-          key: "data:" + key
+          key: key + ":data"
         }
       ];
 
