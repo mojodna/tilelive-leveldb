@@ -12,9 +12,9 @@
     "@mapbox/sphericalmercator": "^1.0.5",
     "async": "^2.6.0",
     "highland": "^2.7.2",
-    "level": "^2.0.1",
     "level-sublevel": "^6.5.4",
     "leveldown": "^2.1.0",
+    "levelup": "^2.0.1",
     "locking-cache": "^0.4.1",
     "tilelive-streaming": "^0.7.2"
   },

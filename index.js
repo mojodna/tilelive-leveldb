@@ -7,8 +7,8 @@ var crypto = require("crypto"),
 
 var _ = require("highland"),
     async = require("async"),
-    level = require("level"),
     leveldown = require("leveldown"),
+    levelup = require("levelup"),
     lockingCache = require("locking-cache"),
     SphericalMercator = require("@mapbox/sphericalmercator"),
     sublevel = require("level-sublevel"),
@@ -24,7 +24,7 @@ var openDb = lockedOpenDb(function(path, lock) {
 
   // lock
   return lock(key, function(unlock) {
-    return level(path, {
+    return levelup(leveldown(path), {
       valueEncoding: "binary"
     }, unlock);
   });
@@ -239,41 +239,34 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
     _headers["content-md5"] = md5;
   }
 
-  var key = [zoom, x, y].join("/"),
-      cargo = this.cargo;
-
-  async.waterfall([
-    async.apply(this.open.bind(this)),
-    function(db, done) {
-      var operations = [
-        {
-          type: "put",
-          key: "md5:" + key,
-          value: md5,
-          valueEncoding: "utf8"
-        },
-        {
-          type: "put",
-          key: "headers:" + key,
-          value: headers,
-          valueEncoding: "json"
-        },
-        {
-          type: "put",
-          key: "data:" + key,
-          value: data
-        }
-      ];
-
-      cargo.push(operations, done);
+  var key = [zoom, x, y].join("/");
+  var operations = [
+    {
+      type: "put",
+      key: "md5:" + key,
+      value: md5,
+      valueEncoding: "utf8"
+    },
+    {
+      type: "put",
+      key: "headers:" + key,
+      value: headers,
+      valueEncoding: "json"
+    },
+    {
+      type: "put",
+      key: "data:" + key,
+      value: data
     }
-  ], function(err) {
+  ];
+
+  this.cargo.push(operations, function(err) {
     if (err) {
       console.warn(err.stack);
     }
 
     // if we wanted to track pending writes, we would do it here
-  })
+  });
 
   return callback();
 };
@@ -292,14 +285,16 @@ LevelDB.prototype.getInfo = function(callback) {
 LevelDB.prototype.putInfo = function(info, callback) {
   callback = callback || function() {};
 
-  return async.waterfall([
-    async.apply(this.open.bind(this)),
-    function(db, done) {
-      return db.put("info", info, {
-        valueEncoding: "json"
-      }, done);
+  this.cargo.push([
+    {
+      type: "put",
+      key: "info",
+      value: info,
+      valueEncoding: "json"
     }
-  ], callback);
+  ]);
+
+  return callback();
 };
 
 LevelDB.prototype.dropTile = function(zoom, x, y, callback) {
