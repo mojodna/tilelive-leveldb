@@ -239,6 +239,8 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
     _headers["content-md5"] = md5;
   }
 
+  _headers["date"] = _headers["date"] || _headers["last-modified"] || new Date();
+
   var key = [zoom, x, y].join("/");
   var operations = [
     {
