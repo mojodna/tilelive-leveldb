@@ -250,7 +250,7 @@ LevelDB.prototype.putTile = function(zoom, x, y, data, headers, callback) {
     {
       type: "put",
       key: key + ":headers",
-      value: headers,
+      value: _headers,
       valueEncoding: "json"
     },
     {
